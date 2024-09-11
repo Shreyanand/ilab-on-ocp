@@ -6,7 +6,88 @@
 #    repo_branch: str
 #    repo_pr: int
 #    repo_url: str [Default: 'https://github.com/instructlab/taxonomy.git']
+#    storage_class_name: str [Default: 'ocs-external-storagecluster-ceph-rbd']
 components:
+  comp-artifact-to-pvc-op:
+    executorLabel: exec-artifact-to-pvc-op
+    inputDefinitions:
+      artifacts:
+        data:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        pvc_path:
+          parameterType: STRING
+  comp-createpvc:
+    executorLabel: exec-createpvc
+    inputDefinitions:
+      parameters:
+        access_modes:
+          description: 'AccessModes to request for the provisioned PVC. May
+
+            be one or more of ``''ReadWriteOnce''``, ``''ReadOnlyMany''``, ``''ReadWriteMany''``,
+            or
+
+            ``''ReadWriteOncePod''``. Corresponds to `PersistentVolumeClaim.spec.accessModes
+            <https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes>`_.'
+          parameterType: LIST
+        annotations:
+          description: Annotations for the PVC's metadata. Corresponds to `PersistentVolumeClaim.metadata.annotations
+            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaim>`_.
+          isOptional: true
+          parameterType: STRUCT
+        pvc_name:
+          description: 'Name of the PVC. Corresponds to `PersistentVolumeClaim.metadata.name
+            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaim>`_.
+            Only one of ``pvc_name`` and ``pvc_name_suffix`` can
+
+            be provided.'
+          isOptional: true
+          parameterType: STRING
+        pvc_name_suffix:
+          description: 'Prefix to use for a dynamically generated name, which
+
+            will take the form ``<argo-workflow-name>-<pvc_name_suffix>``. Only one
+
+            of ``pvc_name`` and ``pvc_name_suffix`` can be provided.'
+          isOptional: true
+          parameterType: STRING
+        size:
+          description: The size of storage requested by the PVC that will be provisioned.
+            For example, ``'5Gi'``. Corresponds to `PersistentVolumeClaim.spec.resources.requests.storage
+            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaimSpec>`_.
+          parameterType: STRING
+        storage_class_name:
+          defaultValue: ''
+          description: 'Name of StorageClass from which to provision the PV
+
+            to back the PVC. ``None`` indicates to use the cluster''s default
+
+            storage_class_name. Set to ``''''`` for a statically specified PVC.'
+          isOptional: true
+          parameterType: STRING
+        volume_name:
+          description: 'Pre-existing PersistentVolume that should back the
+
+            provisioned PersistentVolumeClaim. Used for statically
+
+            specified PV only. Corresponds to `PersistentVolumeClaim.spec.volumeName
+            <https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/persistent-volume-claim-v1/#PersistentVolumeClaimSpec>`_.'
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        name:
+          parameterType: STRING
+  comp-deletepvc:
+    executorLabel: exec-deletepvc
+    inputDefinitions:
+      parameters:
+        pvc_name:
+          description: Name of the PVC to delete. Supports passing a runtime-generated
+            name, such as a name provided by ``kubernetes.CreatePvcOp().outputs['name']``.
+          parameterType: STRING
   comp-git-clone-op:
     executorLabel: exec-git-clone-op
     inputDefinitions:
@@ -23,6 +104,36 @@ components:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
+  comp-kubectl-apply-op:
+    executorLabel: exec-kubectl-apply-op
+    inputDefinitions:
+      parameters:
+        manifest:
+          parameterType: STRING
+  comp-kubectl-wait-for-op:
+    executorLabel: exec-kubectl-wait-for-op
+    inputDefinitions:
+      parameters:
+        condition:
+          parameterType: STRING
+        kind:
+          parameterType: STRING
+        name:
+          parameterType: STRING
+  comp-pytorchjob-manifest-op:
+    executorLabel: exec-pytorchjob-manifest-op
+    inputDefinitions:
+      parameters:
+        name_suffix:
+          parameterType: STRING
+        pvc_name:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        manifest:
+          parameterType: STRING
+        name:
+          parameterType: STRING
   comp-sdg-op:
     executorLabel: exec-sdg-op
     inputDefinitions:
@@ -46,6 +157,20 @@ components:
             schemaVersion: 0.0.1
 deploymentSpec:
   executors:
+    exec-artifact-to-pvc-op:
+      container:
+        args:
+        - cp -r {{$.inputs.artifacts['data'].path}} {{$.inputs.parameters['pvc_path']}}
+        command:
+        - /bin/sh
+        - -c
+        image: registry.access.redhat.com/ubi9/toolbox
+    exec-createpvc:
+      container:
+        image: argostub/createpvc
+    exec-deletepvc:
+      container:
+        image: argostub/deletepvc
     exec-git-clone-op:
       container:
         args:
@@ -59,6 +184,69 @@ deploymentSpec:
         - /bin/sh
         - -c
         image: registry.access.redhat.com/ubi9/toolbox
+    exec-kubectl-apply-op:
+      container:
+        args:
+        - echo "{{$.inputs.parameters['manifest']}}" | kubectl apply -f -
+        command:
+        - /bin/sh
+        - -c
+        image: registry.redhat.io/openshift4/ose-cli
+    exec-kubectl-wait-for-op:
+      container:
+        args:
+        - kubectl wait --for={{$.inputs.parameters['condition']}} {{$.inputs.parameters['kind']}}/{{$.inputs.parameters['name']}}
+          --timeout=2h
+        command:
+        - /bin/sh
+        - -c
+        image: registry.redhat.io/openshift4/ose-cli
+    exec-pytorchjob-manifest-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - pytorchjob_manifest_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.8.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef pytorchjob_manifest_op(name_suffix: str, pvc_name: str) -> NamedTuple('outputs',\
+          \ manifest=str, name=str):\n    import inspect\n    Outputs = NamedTuple('outputs',\
+          \ manifest=str, name=str)\n    name = f\"train-{name_suffix}\"\n    manifest\
+          \ = inspect.cleandoc(\n        f\"\"\"\n        apiVersion: kubeflow.org/v1\n\
+          \        kind: PyTorchJob\n        metadata:\n          name: {name}\n \
+          \       spec:\n          pytorchReplicaSpecs:\n            Master:\n   \
+          \           replicas: 1\n              template:\n                metadata:\n\
+          \                  annotations:\n                    sidecar.istio.io/inject:\
+          \ 'false'\n                spec:\n                  containers:\n      \
+          \              - args:\n                        - python3.11 -u \"run.py\"\
+          \n                      command:\n                        - /bin/bash\n\
+          \                        - '-c'\n                        - '--'\n      \
+          \                image: 'quay.io/michaelclifford/test-train:0.0.11'\n  \
+          \                    name: pytorch\n                      resources: {{}}\n\
+          \                      volumeMounts:\n                        - mountPath:\
+          \ /workspace\n                          name: workspace\n              \
+          \    volumes:\n                    - name: workspace\n                 \
+          \     persistentVolumeClaim:\n                        claimName: {pvc_name}\n\
+          \        \"\"\"\n    )\n\n    return Outputs(manifest, name)\n\n"
+        image: registry.access.redhat.com/ubi9/python-311:latest
     exec-sdg-op:
       container:
         args:
@@ -108,6 +296,63 @@ pipelineInfo:
 root:
   dag:
     tasks:
+      artifact-to-pvc-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-artifact-to-pvc-op
+        dependentTasks:
+        - createpvc
+        - sdg-op
+        inputs:
+          artifacts:
+            data:
+              taskOutputArtifact:
+                outputArtifactKey: sdg
+                producerTask: sdg-op
+          parameters:
+            pvc_path:
+              runtimeValue:
+                constant: /data
+        taskInfo:
+          name: artifact-to-pvc-op
+      createpvc:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-createpvc
+        inputs:
+          parameters:
+            access_modes:
+              runtimeValue:
+                constant:
+                - ReadWriteOnce
+            pvc_name_suffix:
+              runtimeValue:
+                constant: -train
+            size:
+              runtimeValue:
+                constant: 1Gi
+            storage_class_name:
+              componentInputParameter: storage_class_name
+        taskInfo:
+          name: createpvc
+      deletepvc:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-deletepvc
+        dependentTasks:
+        - createpvc
+        - kubectl-wait-for-op
+        inputs:
+          parameters:
+            pvc_name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+        taskInfo:
+          name: deletepvc
       git-clone-op:
         cachingOptions:
           enableCache: true
@@ -123,6 +368,61 @@ root:
               componentInputParameter: repo_url
         taskInfo:
           name: git-clone-op
+      kubectl-apply-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-kubectl-apply-op
+        dependentTasks:
+        - artifact-to-pvc-op
+        - pytorchjob-manifest-op
+        inputs:
+          parameters:
+            manifest:
+              taskOutputParameter:
+                outputParameterKey: manifest
+                producerTask: pytorchjob-manifest-op
+        taskInfo:
+          name: kubectl-apply-op
+      kubectl-wait-for-op:
+        cachingOptions: {}
+        componentRef:
+          name: comp-kubectl-wait-for-op
+        dependentTasks:
+        - kubectl-apply-op
+        - pytorchjob-manifest-op
+        inputs:
+          parameters:
+            condition:
+              runtimeValue:
+                constant: condition=Succeeded
+            kind:
+              runtimeValue:
+                constant: pytorchjobs
+            name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: pytorchjob-manifest-op
+        taskInfo:
+          name: kubectl-wait-for-op
+      pytorchjob-manifest-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-pytorchjob-manifest-op
+        dependentTasks:
+        - createpvc
+        inputs:
+          parameters:
+            name_suffix:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+            pvc_name:
+              taskOutputParameter:
+                outputParameterKey: name
+                producerTask: createpvc
+        taskInfo:
+          name: pytorchjob-manifest-op
       sdg-op:
         cachingOptions:
           enableCache: true
@@ -161,6 +461,10 @@ root:
         defaultValue: https://github.com/instructlab/taxonomy.git
         isOptional: true
         parameterType: STRING
+      storage_class_name:
+        defaultValue: ocs-external-storagecluster-ceph-rbd
+        isOptional: true
+        parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.8.0
 ---
@@ -168,6 +472,12 @@ platforms:
   kubernetes:
     deploymentSpec:
       executors:
+        exec-artifact-to-pvc-op:
+          pvcMount:
+          - mountPath: /data/
+            taskOutputParameter:
+              outputParameterKey: name
+              producerTask: createpvc
         exec-sdg-op:
           configMapAsEnv:
           - configMapName: kfp-model-server
