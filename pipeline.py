@@ -25,13 +25,14 @@ def pipeline_wrapper(mock: List[Literal[MOCKED_STAGES]]):
         from sdg import git_clone_op, sdg_op
 
     # Imports for Training stage
+    from utils import artifact_to_pvc_op
+
     if "train" in mock:
         from training.faked import pytorchjob_manifest_op
         from utils.faked import kubectl_apply_op, kubectl_wait_for_op
-        from utils import artifact_to_pvc_op
     else:
         from training import pytorchjob_manifest_op
-        from utils import kubectl_apply_op, kubectl_wait_for_op, artifact_to_pvc_op
+        from utils import kubectl_apply_op, kubectl_wait_for_op
 
     @dsl.pipeline(
         display_name="InstructLab",

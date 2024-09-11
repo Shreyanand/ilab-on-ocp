@@ -124,8 +124,28 @@ components:
     executorLabel: exec-pytorchjob-manifest-op
     inputDefinitions:
       parameters:
+        base_image:
+          defaultValue: quay.io/michaelclifford/test-train:0.0.15
+          isOptional: true
+          parameterType: STRING
+        data_path:
+          defaultValue: training/sample-data/train_all_pruned_SDG.jsonl
+          isOptional: true
+          parameterType: STRING
         name_suffix:
           parameterType: STRING
+        nnodes:
+          defaultValue: 2.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        num_proc_per_node:
+          defaultValue: 2.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        num_workers:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
         pvc_name:
           parameterType: STRING
     outputDefinitions:
@@ -227,25 +247,52 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef pytorchjob_manifest_op(name_suffix: str, pvc_name: str) -> NamedTuple('outputs',\
-          \ manifest=str, name=str):\n    import inspect\n    Outputs = NamedTuple('outputs',\
-          \ manifest=str, name=str)\n    name = f\"train-{name_suffix}\"\n    manifest\
-          \ = inspect.cleandoc(\n        f\"\"\"\n        apiVersion: kubeflow.org/v1\n\
-          \        kind: PyTorchJob\n        metadata:\n          name: {name}\n \
-          \       spec:\n          pytorchReplicaSpecs:\n            Master:\n   \
-          \           replicas: 1\n              template:\n                metadata:\n\
-          \                  annotations:\n                    sidecar.istio.io/inject:\
-          \ 'false'\n                spec:\n                  containers:\n      \
-          \              - args:\n                        - python3.11 -u \"run.py\"\
-          \n                      command:\n                        - /bin/bash\n\
-          \                        - '-c'\n                        - '--'\n      \
-          \                image: 'quay.io/michaelclifford/test-train:0.0.11'\n  \
-          \                    name: pytorch\n                      resources: {{}}\n\
+          \ *\n\ndef pytorchjob_manifest_op(name_suffix: str,\n                  \
+          \         pvc_name: str,\n                           num_proc_per_node:\
+          \ int = 2,\n                           nnodes: int = 2,\n              \
+          \             num_workers: int = 1,\n                           base_image:\
+          \ str = \"quay.io/michaelclifford/test-train:0.0.15\",\n               \
+          \            data_path: str = \"training/sample-data/train_all_pruned_SDG.jsonl\"\
+          \n                           ) -> NamedTuple('outputs', manifest=str, name=str):\n\
+          \    import inspect\n    Outputs = NamedTuple('outputs', manifest=str, name=str)\n\
+          \    name = f\"train-{name_suffix}\"\n    manifest = inspect.cleandoc(\n\
+          \        f\"\"\"\n        apiVersion: kubeflow.org/v1\n        kind: PyTorchJob\n\
+          \        metadata:\n          name: {name}\n        spec:\n          nprocPerNode:\
+          \ {str(num_proc_per_node)}\n          pytorchReplicaSpecs:\n           \
+          \ Master:\n              replicas: 1\n              template:\n        \
+          \        metadata:\n                  annotations:\n                   \
+          \ sidecar.istio.io/inject: 'false'\n                spec:\n            \
+          \      containers:\n                    - args:\n                      \
+          \  - python3.11 -u \"run.py\" --nnodes {nnodes} --nproc_per_node {num_proc_per_node}\
+          \ --node_rank $(RANK) --rdzv_endpoint $(MASTER_ADDR):$(MASTER_PORT) --data_path\
+          \ {data_path}\n                      command:\n                        -\
+          \ /bin/bash\n                        - '-c'\n                        - '--'\n\
+          \                      image: {base_image}\n                      name:\
+          \ pytorch\n                      resources:\n                        limits:\n\
+          \                          nvidia.com/gpu: {num_proc_per_node}\n       \
+          \                 requests:\n                          nvidia.com/gpu: {num_proc_per_node}\n\
           \                      volumeMounts:\n                        - mountPath:\
           \ /workspace\n                          name: workspace\n              \
           \    volumes:\n                    - name: workspace\n                 \
           \     persistentVolumeClaim:\n                        claimName: {pvc_name}\n\
-          \        \"\"\"\n    )\n\n    return Outputs(manifest, name)\n\n"
+          \            Worker:\n              replicas: {num_workers}\n          \
+          \    template:\n                metadata:\n                  annotations:\n\
+          \                    sidecar.istio.io/inject: 'false'\n                spec:\n\
+          \                  containers:\n                    - args:\n          \
+          \              - - python3.11 -u \"run.py\" --nnodes {nnodes} --nproc_per_node\
+          \ {num_proc_per_node} --node_rank $(RANK) --rdzv_endpoint $(MASTER_ADDR):$(MASTER_PORT)\
+          \ --data_path {data_path}\n                      command:\n            \
+          \            - /bin/bash\n                        - '-c'\n             \
+          \           - '--'\n                      image: {base_image}\n        \
+          \              name: pytorch\n                      resources:\n       \
+          \                 limits:\n                          nvidia.com/gpu: {num_proc_per_node}\n\
+          \                        requests:\n                          nvidia.com/gpu:\
+          \ {num_proc_per_node}\n                      volumeMounts:\n           \
+          \             - mountPath: /workspace\n                          name: workspace\n\
+          \                  volumes:\n                    - name: workspace\n   \
+          \                   persistentVolumeClaim:\n                        claimName:\
+          \ {pvc_name}\n        \"\"\"\n    )\n\n    return Outputs(manifest, name)\n\
+          \n"
         image: registry.access.redhat.com/ubi9/python-311:latest
     exec-sdg-op:
       container:
